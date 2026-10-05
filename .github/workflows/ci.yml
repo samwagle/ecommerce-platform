@@ -49,13 +49,13 @@ jobs:
     steps:
 
       # --------------------------------------------------
-      # Checkout
+      # Checkout repository
       # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # --------------------------------------------------
-      # Node.js
+      # Setup Node.js
       # --------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -77,7 +77,7 @@ jobs:
         run: npm run test:unit
 
       # --------------------------------------------------
-      # PostgreSQL client
+      # Install PostgreSQL client
       # --------------------------------------------------
       - name: Install PostgreSQL client
         run: |
@@ -150,25 +150,25 @@ jobs:
 
 
   # ==================================================
-  # JOB 2 — AWS OIDC
+  # JOB 2 — BUILD + AWS OIDC AUTHENTICATION
   # ==================================================
 
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
 
-    # This job cannot start until backend-tests succeeds.
+    # Wait for Job 1 to succeed
     needs:
       - backend-tests
 
-    # Only publish from a direct push to main.
-    # Pull requests will not receive AWS access.
+    # Only run this job for direct pushes to main.
+    # Pull requests do not get AWS access.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
 
       # --------------------------------------------------
-      # Checkout
+      # Checkout repository
       # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -176,8 +176,8 @@ jobs:
       # --------------------------------------------------
       # Build Docker image
       #
-      # This is a NEW runner, so the image from Job 1
-      # does not exist here.
+      # This job gets a fresh GitHub-hosted runner,
+      # so the image from Job 1 is not available here.
       # --------------------------------------------------
       - name: Build backend Docker image
         working-directory: backend
@@ -187,10 +187,44 @@ jobs:
             .
 
       # --------------------------------------------------
-      # TEMPORARY OIDC DEBUGGING
+      # Inspect GitHub OIDC claims
+      #
+      # This replaces the temporary OIDC debugger action.
+      # We only print non-sensitive claims.
       # --------------------------------------------------
-      - name: Debug OIDC token
-        uses: github/actions-oidc-debugger@main
+      - name: Inspect OIDC claims
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Requesting GitHub OIDC token..."
+
+          OIDC_TOKEN="$(curl -sSf \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+
+          PAYLOAD="$(echo "$OIDC_TOKEN" | cut -d '.' -f 2)"
+
+          # Add Base64 padding if required.
+          case $((${#PAYLOAD} % 4)) in
+            2)
+              PAYLOAD="${PAYLOAD}=="
+              ;;
+            3)
+              PAYLOAD="${PAYLOAD}="
+              ;;
+          esac
+
+          echo "OIDC claims:"
+          echo "$PAYLOAD" | base64 -d | jq '{
+            iss,
+            aud,
+            sub,
+            repository,
+            repository_owner,
+            ref,
+            event_name
+          }'
 
       # --------------------------------------------------
       # GitHub OIDC → AWS STS → IAM Role
@@ -202,10 +236,9 @@ jobs:
           aws-region: us-east-1
 
       # --------------------------------------------------
-      # Verify assumed AWS identity
+      # Verify the assumed AWS identity
       # --------------------------------------------------
       - name: Verify AWS identity
         run: |
           aws sts get-caller-identity
-
 
