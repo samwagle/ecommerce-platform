@@ -75,7 +75,7 @@ jobs:
           sudo apt-get install -y postgresql-client
 
       # --------------------------------------------------
-      # 6. Explicitly wait for PostgreSQL
+      # 6. Wait for PostgreSQL
       # --------------------------------------------------
       - name: Wait for PostgreSQL
         run: |
@@ -103,7 +103,7 @@ jobs:
             -d ecommerce
 
       # --------------------------------------------------
-      # 7. Initialize database schema/data
+      # 7. Initialize database
       # --------------------------------------------------
       - name: Initialize database
         env:
@@ -128,3 +128,12 @@ jobs:
           DB_USER: ecommerce
           DB_PASSWORD: ecommerce
         run: npm run test:integration
+
+      # --------------------------------------------------
+      # 9. Build backend Docker image
+      # --------------------------------------------------
+      - name: Build backend Docker image
+        run: |
+          docker build \
+            -t ecommerce-backend:${{ github.sha }} \
+            .
