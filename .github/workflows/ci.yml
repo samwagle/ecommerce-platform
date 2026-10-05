@@ -14,14 +14,39 @@ jobs:
     name: Backend Tests
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16
+
+        env:
+          POSTGRES_DB: ecommerce
+          POSTGRES_USER: ecommerce
+          POSTGRES_PASSWORD: ecommerce
+
+        ports:
+          - 5432:5432
+
+        options: >-
+          --health-cmd "pg_isready -U ecommerce -d ecommerce"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 10s
+
     defaults:
       run:
         working-directory: backend
 
     steps:
+      # --------------------------------------------------
+      # 1. Checkout source code
+      # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # --------------------------------------------------
+      # 2. Setup Node.js
+      # --------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -29,8 +54,77 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
+      # --------------------------------------------------
+      # 3. Install backend dependencies
+      # --------------------------------------------------
       - name: Install dependencies
         run: npm ci
 
+      # --------------------------------------------------
+      # 4. Run unit tests
+      # --------------------------------------------------
       - name: Run unit tests
         run: npm run test:unit
+
+      # --------------------------------------------------
+      # 5. Install PostgreSQL client on the GitHub runner
+      # --------------------------------------------------
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      # --------------------------------------------------
+      # 6. Explicitly wait for PostgreSQL
+      # --------------------------------------------------
+      - name: Wait for PostgreSQL
+        run: |
+          echo "Waiting for PostgreSQL..."
+
+          for i in {1..30}; do
+            if pg_isready \
+              -h localhost \
+              -p 5432 \
+              -U ecommerce \
+              -d ecommerce
+            then
+              echo "PostgreSQL is ready."
+              break
+            fi
+
+            echo "PostgreSQL not ready yet. Attempt $i/30"
+            sleep 2
+          done
+
+          pg_isready \
+            -h localhost \
+            -p 5432 \
+            -U ecommerce \
+            -d ecommerce
+
+      # --------------------------------------------------
+      # 7. Initialize database schema/data
+      # --------------------------------------------------
+      - name: Initialize database
+        env:
+          PGPASSWORD: ecommerce
+        run: |
+          psql \
+            -h localhost \
+            -p 5432 \
+            -U ecommerce \
+            -d ecommerce \
+            -v ON_ERROR_STOP=1 \
+            -f database/init.sql
+
+      # --------------------------------------------------
+      # 8. Run integration tests
+      # --------------------------------------------------
+      - name: Run integration tests
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_NAME: ecommerce
+          DB_USER: ecommerce
+          DB_PASSWORD: ecommerce
+        run: npm run test:integration
