@@ -16,7 +16,7 @@ permissions:
 jobs:
 
   # ==================================================
-  # JOB 1 — TESTS
+  # JOB 1 — TESTS + DOCKER BUILD
   # ==================================================
 
   backend-tests:
@@ -49,13 +49,13 @@ jobs:
     steps:
 
       # --------------------------------------------------
-      # 1. Checkout source code
+      # Checkout
       # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # --------------------------------------------------
-      # 2. Setup Node.js
+      # Node.js
       # --------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -65,19 +65,19 @@ jobs:
           cache-dependency-path: backend/package-lock.json
 
       # --------------------------------------------------
-      # 3. Install backend dependencies
+      # Install dependencies
       # --------------------------------------------------
       - name: Install dependencies
         run: npm ci
 
       # --------------------------------------------------
-      # 4. Run unit tests
+      # Unit tests
       # --------------------------------------------------
       - name: Run unit tests
         run: npm run test:unit
 
       # --------------------------------------------------
-      # 5. Install PostgreSQL client
+      # PostgreSQL client
       # --------------------------------------------------
       - name: Install PostgreSQL client
         run: |
@@ -85,7 +85,7 @@ jobs:
           sudo apt-get install -y postgresql-client
 
       # --------------------------------------------------
-      # 6. Wait for PostgreSQL
+      # Wait for PostgreSQL
       # --------------------------------------------------
       - name: Wait for PostgreSQL
         run: |
@@ -113,7 +113,7 @@ jobs:
             -d ecommerce
 
       # --------------------------------------------------
-      # 7. Initialize database
+      # Initialize database
       # --------------------------------------------------
       - name: Initialize database
         env:
@@ -128,7 +128,7 @@ jobs:
             -f database/init.sql
 
       # --------------------------------------------------
-      # 8. Run integration tests
+      # Integration tests
       # --------------------------------------------------
       - name: Run integration tests
         env:
@@ -140,12 +140,72 @@ jobs:
         run: npm run test:integration
 
       # --------------------------------------------------
-      # 9. Build backend Docker image
+      # Build Docker image
       # --------------------------------------------------
       - name: Build backend Docker image
         run: |
           docker build \
             -t ecommerce-backend:${{ github.sha }} \
             .
+
+
+  # ==================================================
+  # JOB 2 — AWS OIDC
+  # ==================================================
+
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    # This job cannot start until backend-tests succeeds.
+    needs:
+      - backend-tests
+
+    # Only publish from a direct push to main.
+    # Pull requests will not receive AWS access.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+
+      # --------------------------------------------------
+      # Checkout
+      # --------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------
+      # Build Docker image
+      #
+      # This is a NEW runner, so the image from Job 1
+      # does not exist here.
+      # --------------------------------------------------
+      - name: Build backend Docker image
+        working-directory: backend
+        run: |
+          docker build \
+            -t ecommerce-backend:${{ github.sha }} \
+            .
+
+      # --------------------------------------------------
+      # TEMPORARY OIDC DEBUGGING
+      # --------------------------------------------------
+      - name: Debug OIDC token
+        uses: github/actions-oidc-debugger@main
+
+      # --------------------------------------------------
+      # GitHub OIDC → AWS STS → IAM Role
+      # --------------------------------------------------
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::271758791430:role/GitHubActionsECRPushEcommerce
+          aws-region: us-east-1
+
+      # --------------------------------------------------
+      # Verify assumed AWS identity
+      # --------------------------------------------------
+      - name: Verify AWS identity
+        run: |
+          aws sts get-caller-identity
 
 
