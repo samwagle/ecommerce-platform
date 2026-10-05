@@ -1,4 +1,3 @@
-```yaml
 name: CI
 
 on:
@@ -149,7 +148,4 @@ jobs:
             -t ecommerce-backend:${{ github.sha }} \
             .
 
-
-  # ===================================
-```
 
