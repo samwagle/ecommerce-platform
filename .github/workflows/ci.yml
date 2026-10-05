@@ -1,3 +1,4 @@
+```yaml
 name: CI
 
 on:
@@ -48,9 +49,15 @@ jobs:
 
     steps:
 
+      # --------------------------------------------------
+      # 1. Checkout source code
+      # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # --------------------------------------------------
+      # 2. Setup Node.js
+      # --------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -58,17 +65,29 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
+      # --------------------------------------------------
+      # 3. Install backend dependencies
+      # --------------------------------------------------
       - name: Install dependencies
         run: npm ci
 
+      # --------------------------------------------------
+      # 4. Run unit tests
+      # --------------------------------------------------
       - name: Run unit tests
         run: npm run test:unit
 
+      # --------------------------------------------------
+      # 5. Install PostgreSQL client
+      # --------------------------------------------------
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client
 
+      # --------------------------------------------------
+      # 6. Wait for PostgreSQL
+      # --------------------------------------------------
       - name: Wait for PostgreSQL
         run: |
           echo "Waiting for PostgreSQL..."
@@ -94,6 +113,9 @@ jobs:
             -U ecommerce \
             -d ecommerce
 
+      # --------------------------------------------------
+      # 7. Initialize database
+      # --------------------------------------------------
       - name: Initialize database
         env:
           PGPASSWORD: ecommerce
@@ -106,6 +128,9 @@ jobs:
             -v ON_ERROR_STOP=1 \
             -f database/init.sql
 
+      # --------------------------------------------------
+      # 8. Run integration tests
+      # --------------------------------------------------
       - name: Run integration tests
         env:
           DB_HOST: localhost
@@ -115,6 +140,9 @@ jobs:
           DB_PASSWORD: ecommerce
         run: npm run test:integration
 
+      # --------------------------------------------------
+      # 9. Build backend Docker image
+      # --------------------------------------------------
       - name: Build backend Docker image
         run: |
           docker build \
@@ -122,40 +150,6 @@ jobs:
             .
 
 
-  # ==================================================
-  # JOB 2 — BUILD + AWS AUTHENTICATION PROCESS
-  # ==================================================
+  # ===================================
+```
 
-  build-and-push:
-    name: Build and Push Docker Image
-    runs-on: ubuntu-latest
-
-    needs:
-      - backend-tests
-
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    steps:
-
-      # Fresh runner needs source code
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # Build image BEFORE AWS authentication
-      - name: Build backend Docker image
-        working-directory: backend
-        run: |
-          docker build \
-            -t ecommerce-backend:${{ github.sha }} \
-            .
-
-      # GitHub OIDC → AWS STS → IAM Role
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::271758791430:role/GitHubActionsECRPushEcommerce
-          aws-region: us-east-1
-
-      # Verify that OIDC authentication worked
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
