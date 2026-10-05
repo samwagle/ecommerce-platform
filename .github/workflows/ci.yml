@@ -123,7 +123,7 @@ jobs:
 
 
   # ==================================================
-  # JOB 2 — BUILD + AWS AUTHENTICATION
+  # JOB 2 — BUILD + AWS AUTHENTICATION PROCESS
   # ==================================================
 
   build-and-push:
