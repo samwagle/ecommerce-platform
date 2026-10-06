@@ -170,7 +170,7 @@ jobs:
         with:
           images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
           tags: |
-            type=sha,format=short,prefix=
+            type=sha,format=short,prefix=backend:
 
       # 5. Build once and push, with GitHub Actions layer caching
       - name: Build and Push Docker Image
@@ -181,5 +181,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
