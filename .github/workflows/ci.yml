@@ -130,6 +130,22 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # TEMPORARY DEBUG STEP: delete once the role assumption works.
+      # Prints the claims AWS compares against the trust policy.
+      - name: Inspect OIDC claims
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOKEN_JSON="$(curl -sSf \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+          PAYLOAD="$(echo "$TOKEN_JSON" | jq -r .value | cut -d '.' -f 2 | tr '_-' '/+')"
+          case $((${#PAYLOAD} % 4)) in
+            2) PAYLOAD="${PAYLOAD}==" ;;
+            3) PAYLOAD="${PAYLOAD}=" ;;
+          esac
+          echo "$PAYLOAD" | base64 -d | jq '{iss, aud, sub, repository, ref}'
+
       # 1. Authenticate to AWS via OIDC (no long-lived access keys)
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
