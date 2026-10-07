@@ -4,12 +4,15 @@ on:
   push:
     branches:
       - main
+
   pull_request:
     branches:
       - main
+
   workflow_dispatch:
 
-# Nothing by default. Each job asks for only what it needs.
+# Nothing by default.
+# Each job requests only the permissions it actually needs.
 permissions: {}
 
 env:
@@ -20,8 +23,16 @@ env:
 jobs:
 
   # ==================================================
-  # JOB 1: TESTS (no AWS access, runs on PRs and pushes)
+  # JOB 1: BACKEND TESTS
+  #
+  # Runs on:
+  # - Pull requests
+  # - Pushes to main
+  # - Manual workflow runs
+  #
+  # No AWS access.
   # ==================================================
+
   backend-tests:
     name: Backend Tests
     runs-on: ubuntu-latest
@@ -53,8 +64,18 @@ jobs:
         working-directory: backend
 
     steps:
+
+      # ----------------------------------------------
+      # Checkout source code
+      # ----------------------------------------------
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+
+      # ----------------------------------------------
+      # Node.js
+      # ----------------------------------------------
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -63,29 +84,70 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
+
+      # ----------------------------------------------
+      # Install dependencies
+      # ----------------------------------------------
+
       - name: Install dependencies
         run: npm ci
 
+
+      # ----------------------------------------------
+      # Unit tests
+      # ----------------------------------------------
+
       - name: Run unit tests
         run: npm run test:unit
+
+
+      # ----------------------------------------------
+      # PostgreSQL client
+      #
+      # PostgreSQL server:
+      # GitHub Actions service container
+      #
+      # PostgreSQL client:
+      # GitHub runner
+      # ----------------------------------------------
 
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client
 
+
+      # ----------------------------------------------
+      # Wait for PostgreSQL
+      # ----------------------------------------------
+
       - name: Wait for PostgreSQL
         run: |
           for i in {1..30}; do
-            if pg_isready -h localhost -p 5432 -U ecommerce -d ecommerce; then
+            if pg_isready \
+              -h localhost \
+              -p 5432 \
+              -U ecommerce \
+              -d ecommerce
+            then
               echo "PostgreSQL is ready."
               break
             fi
+
             echo "PostgreSQL not ready yet. Attempt $i/30"
             sleep 2
           done
 
-          pg_isready -h localhost -p 5432 -U ecommerce -d ecommerce
+          pg_isready \
+            -h localhost \
+            -p 5432 \
+            -U ecommerce \
+            -d ecommerce
+
+
+      # ----------------------------------------------
+      # Initialize database
+      # ----------------------------------------------
 
       - name: Initialize database
         env:
@@ -99,6 +161,11 @@ jobs:
             -v ON_ERROR_STOP=1 \
             -f database/init.sql
 
+
+      # ----------------------------------------------
+      # Integration tests
+      # ----------------------------------------------
+
       - name: Run integration tests
         env:
           DB_HOST: localhost
@@ -110,43 +177,50 @@ jobs:
 
 
   # ==================================================
-  # JOB 2: BUILD ONCE + PUSH TO ECR (main branch only)
-  # The only job allowed to request an OIDC token.
+  # JOB 2: BUILD → SCAN → PUSH
+  #
+  # Runs only after backend-tests succeeds.
+  #
+  # Only this job can request a GitHub OIDC token.
   # ==================================================
-  build-and-push:
-    name: Build and Push Image
-    runs-on: ubuntu-latest
-    needs: backend-tests
 
-    # Runs for pushes to main, or a manual run started from main.
-    # The IAM trust policy only allows refs/heads/main.
+  build-and-push:
+    name: Build, Scan and Push Image
+    runs-on: ubuntu-latest
+
+    needs:
+      - backend-tests
+
+    # Only push images from main.
+    #
+    # Pull requests may run Job 1, but they do not
+    # publish images to ECR.
     if: github.ref == 'refs/heads/main'
 
     permissions:
-      id-token: write   # Essential for OIDC token federation with AWS IAM
       contents: read
+      id-token: write
 
     steps:
-      - name: Checkout Code
+
+      # ----------------------------------------------
+      # Checkout source code
+      # ----------------------------------------------
+
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # TEMPORARY DEBUG STEP: delete once the role assumption works.
-      # Prints the claims AWS compares against the trust policy.
-      - name: Inspect OIDC claims
-        shell: bash
-        run: |
-          set -euo pipefail
-          TOKEN_JSON="$(curl -sSf \
-            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
-          PAYLOAD="$(echo "$TOKEN_JSON" | jq -r .value | cut -d '.' -f 2 | tr '_-' '/+')"
-          case $((${#PAYLOAD} % 4)) in
-            2) PAYLOAD="${PAYLOAD}==" ;;
-            3) PAYLOAD="${PAYLOAD}=" ;;
-          esac
-          echo "$PAYLOAD" | base64 -d | jq '{iss, aud, sub, repository, ref}'
 
-      # 1. Authenticate to AWS via OIDC (no long-lived access keys)
+      # ----------------------------------------------
+      # AWS authentication
+      #
+      # GitHub OIDC
+      #       ↓
+      # AWS STS
+      #       ↓
+      # Temporary IAM role credentials
+      # ----------------------------------------------
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -154,33 +228,103 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           audience: sts.amazonaws.com
 
-      # 2. Log in to Amazon ECR private registry
+
+      # ----------------------------------------------
+      # Authenticate Docker with ECR
+      # ----------------------------------------------
+
       - name: Log in to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 3. Set up Docker Buildx for layer caching
+
+      # ----------------------------------------------
+      # Docker Buildx
+      # ----------------------------------------------
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 4. Image tag (commit SHA) and OCI labels
+
+      # ----------------------------------------------
+      # Docker image metadata
+      #
+      # Full Git commit SHA is used as the image tag.
+      #
+      # Example:
+      #
+      # ecommerce-backend:
+      # 8d3f67ad463ac980ce3dfbd2611e2a9dd5089771
+      #
+      # ECR repository is configured as immutable.
+      # ----------------------------------------------
+
       - name: Extract Docker Metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
           tags: |
-            type=sha,format=short,prefix=backend:
+            type=sha,format=long
 
-      # 5. Build once and push, with GitHub Actions layer caching
-      - name: Build and Push Docker Image
+
+      # ----------------------------------------------
+      # Build Docker image
+      #
+      # IMPORTANT:
+      #
+      # push=false
+      #   → do NOT push yet
+      #
+      # load=true
+      #   → load image into local Docker engine
+      #      so Trivy can scan it
+      # ----------------------------------------------
+
+      - name: Build Docker Image
         uses: docker/build-push-action@v6
         with:
           context: backend
           file: backend/Dockerfile
-          push: true
+
+          push: false
+          load: true
+
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
           provenance: false
+
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+
+      # ----------------------------------------------
+      # Trivy container image security scan
+      #
+      # Blocking policy:
+      #
+      # HIGH     → fail if fixed vulnerability exists
+      # CRITICAL → fail if fixed vulnerability exists
+      #
+      # Unfixed vulnerabilities are ignored.
+      # MEDIUM and LOW do not block the pipeline.
+      # ----------------------------------------------
+
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.tags }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+
+      # ----------------------------------------------
+      # Push only if Trivy succeeds.
+      # ----------------------------------------------
+
+      - name: Push Docker image to ECR
+        run: |
+          docker push ${{ steps.meta.outputs.tags }}
